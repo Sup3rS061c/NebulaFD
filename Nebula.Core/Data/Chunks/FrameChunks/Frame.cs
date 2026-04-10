@@ -526,9 +526,13 @@ namespace Nebula.Core.Data.Chunks.FrameChunks
                 foreach (Parameter param in checkParams.Where(x => x.Code == 39))
                     if (param.Data is ParameterGroupPointer point && point.CCNPointer != 0)
                     {
-                        Debug.Assert(groupLookupTable.ContainsKey(point.CCNPointer),
-                            "CCN Pointer is offset incorrectly for build " + NebulaCore.Build);
-                        point.ID = groupLookupTable[point.CCNPointer].ID;
+                        if (groupLookupTable.TryGetValue(point.CCNPointer, out var foundGroup))
+                            point.ID = foundGroup.ID;
+                        else
+                        {
+                            // Group defined in a different frame; keep existing ID from file
+                            Debug.WriteLine($"[Frame.Fix] Group pointer 0x{point.CCNPointer:X} not found in current frame (Build {NebulaCore.Build}), keeping ID={point.ID}");
+                        }
                     }
             }
             else

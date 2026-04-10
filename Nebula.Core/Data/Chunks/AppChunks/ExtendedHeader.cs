@@ -74,8 +74,14 @@ namespace Nebula.Core.Data.Chunks.AppChunks
                 case 2: // Sub-Application
                     NebulaCore.Windows = true;
                     break;
+                case 3:  // Java Sub-Application
+                case 4:  // Java Application
+                case 5:  // Java Internet Applet
+                case 6:  // Java Web Start
+                case 7:  // Java for Mobile Devices
+                case 9:  // Java Mac Application
                 case 10: // Adobe Flash
-                    NebulaCore.Flash = true;
+                case 11: // Java for BlackBerry
                     break;
                 case 12: // Android / OUYA Application
                 case 20: // XNA Phone App
@@ -87,20 +93,30 @@ namespace Nebula.Core.Data.Chunks.AppChunks
                 case 15: // Final iOS Xcode Project
                     NebulaCore.iOS = true;
                     break;
+                case 18: // XNA Windows Project
+                case 19: // XNA Xbox Project
+                    NebulaCore.Windows = true;
+                    break;
                 case 27: // HTML5 Development
                 case 28: // HTML5 Final Project
                     NebulaCore.HTML = true;
                     break;
-				//case 74: // Nintendo Switch
-				//case 75: // Xbox One (2023)
-				//case 78: // Playstation 4
-				//case 81: // Xbox One (2025)
+                case 33: // UWP Project
+                    break;
+				// Fusion 3 Console platforms (CTFAK2.0 mapping)
+				case 74: // Nintendo Switch
+				case 75: // Xbox One (2023)
+				case 78: // Playstation 4
+				case 81: // Xbox One (2025)
 				case >=70: // Modern Consoles
 					if (NebulaCore.Fusion != 3.0f)
                     {
                         this.Log($"Fusion 3 detected, correcting.", Spectre.Console.Color.Yellow3_1);
                         NebulaCore.Fusion = 3.0f;
                     }
+                    break;
+                default:
+                    this.Log($"Unknown Build Type: {BuildType}", Spectre.Console.Color.Red);
                     break;
             }
             reader.Skip(3);

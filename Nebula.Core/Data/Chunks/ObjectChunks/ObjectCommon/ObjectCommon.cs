@@ -289,6 +289,12 @@ namespace Nebula.Core.Data.Chunks.ObjectChunks.ObjectCommon
 						AlterableNamesOffset = Offset;
                         break;
                 }
+                // CTFAK2.0: Android Build 290+ has a completely different offset layout
+                // Values offset appears at index 3, animations moved to later position
+                if (NebulaCore.Build >= 290 && index == 3 && Offset != 0)
+                    AlterableValuesOffset = Offset;
+                // CTFAK2.0: Android Build 288/284 special handling - extension/data offsets swapped
+                // and strings offset at index 8 is skipped for build >= 284
             }
             else if (NebulaCore.iOS)
             {

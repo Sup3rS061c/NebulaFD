@@ -412,6 +412,50 @@ namespace Nebula.Core.Data.Chunks.FrameChunks
                     objectInfos.Add(instance.ObjectInfo, newOI);
                 }
 
+            // Fix bad objects: scan all event references and add missing ObjectInfo entries
+            // Events can reference objects that aren't instantiated in this Frame's instances
+            // (global objects, cross-frame references, extension objects, etc.)
+            HashSet<uint> referencedObjectInfos = new();
+            foreach (Event evnt in FrameEvents.Events)
+            {
+                // Check conditions
+                foreach (Condition cond in evnt.Conditions)
+                {
+                    if (cond.ObjectInfo != 0 && !cond.EventFlags["BadObject"])
+                        referencedObjectInfos.Add(cond.ObjectInfo);
+                    // Also check parameters for object references
+                    foreach (Parameter param in cond.Parameters)
+                        CollectParameterObjectInfos(param, referencedObjectInfos);
+                }
+                // Check actions
+                foreach (Events.Action act in evnt.Actions)
+                {
+                    if (act.ObjectInfo != 0 && !act.EventFlags["BadObject"])
+                        referencedObjectInfos.Add(act.ObjectInfo);
+                    foreach (Parameter param in act.Parameters)
+                        CollectParameterObjectInfos(param, referencedObjectInfos);
+                }
+            }
+            
+            int addedCount = 0;
+            foreach (uint refObjInfo in referencedObjectInfos)
+            {
+                if (objectInfos.ContainsKey(refObjInfo))
+                    continue;
+                if (!NebulaCore.PackageData.FrameItems.Items.ContainsKey((int)refObjInfo))
+                    continue; // Object doesn't exist globally either - skip
+                
+                MFAObjectInfo newOI = CreateObjectInfoFromGlobal((int)refObjInfo);
+                if (newOI != null)
+                {
+                    objectInfos.Add(refObjInfo, newOI);
+                    addedCount++;
+                    Debug.WriteLine($"[Frame.WriteMFA] Added missing object reference 0x{refObjInfo:X} ({newOI.Name}) to frame '{FrameName}'");
+                }
+            }
+            if (addedCount > 0)
+                Debug.WriteLine($"[Frame.WriteMFA] Added {addedCount} missing object(s) to frame '{FrameName}' to fix bad objects");
+
             writer.Write(objectInfos.Count);
             foreach (MFAObjectInfo oI in objectInfos.Values)
                 oI.WriteMFA(writer);
@@ -498,6 +542,199 @@ namespace Nebula.Core.Data.Chunks.FrameChunks
             if (NebulaCore.Fusion > 1.5f)
                 FrameRect.WriteMFA(writer, this);
             writer.WriteByte(0); // Last Chunk
+        }
+
+        /// <summary>
+        /// Create an MFAObjectInfo from a global FrameItems entry for a missing object reference.
+        /// This fixes "bad objects" warnings when events reference objects not in this frame's instances.
+        /// </summary>
+        private MFAObjectInfo? CreateObjectInfoFromGlobal(int objectInfoKey)
+        {
+            if (!NebulaCore.PackageData.FrameItems.Items.ContainsKey(objectInfoKey))
+                return null;
+
+            ObjectInfo oI = NebulaCore.PackageData.FrameItems.Items[objectInfoKey];
+            MFAObjectInfo newOI = new MFAObjectInfo();
+            newOI.SyncFlags(oI.Header.ObjectFlags);
+            newOI.Handle = oI.Header.Handle;
+            newOI.ObjectType = oI.Header.Type;
+            newOI.InkEffect = oI.Header.InkEffect;
+            newOI.InkEffectParameter = oI.Header.InkEffectParam;
+            newOI.Name = oI.Name;
+            newOI.Transparent = oI.Header.InkEffectFlags["NotTransparent"];
+            newOI.AntiAliasing = oI.Header.InkEffectFlags["AntiAliasing"];
+            newOI.IconHandle = oI.IconHandle;
+            newOI.IconType = 1;
+
+            switch (oI.Header.Type)
+            {
+                case 0:
+                    MFAQuickBackdrop newOQB = new MFAQuickBackdrop();
+                    ObjectQuickBackdrop? oldOQB = oI.Properties as ObjectQuickBackdrop;
+                    if (oldOQB == null) return null;
+                    newOQB.ObstacleType = oldOQB.ObstacleType;
+                    newOQB.CollisionType = oldOQB.CollisionType;
+                    newOQB.Width = oldOQB.Width * (oldOQB.Shape.LineFlags["FlipX"] ? -1 : 1);
+                    newOQB.Height = oldOQB.Height * (oldOQB.Shape.LineFlags["FlipY"] ? -1 : 1);
+                    newOQB.BorderSize = oldOQB.Shape.BorderSize;
+                    newOQB.BorderColor = oldOQB.Shape.BorderColor;
+                    newOQB.Shape = oldOQB.Shape.ShapeType;
+                    newOQB.FillType = oldOQB.Shape.FillType;
+                    newOQB.Color1 = oldOQB.Shape.Color1;
+                    newOQB.Color2 = oldOQB.Shape.Color2;
+                    newOQB.QuickBkdFlags.Value = oldOQB.Shape.VerticalGradient ? 1u : 0u;
+                    newOQB.Image = oldOQB.Shape.Image;
+                    newOI.ObjectLoader = newOQB;
+                    break;
+                case 1:
+                    MFABackdrop newOBD = new MFABackdrop();
+                    ObjectBackdrop? oldOBD = oI.Properties as ObjectBackdrop;
+                    if (oldOBD == null) return null;
+                    newOBD.ObstacleType = oldOBD.ObstacleType;
+                    newOBD.CollisionType = oldOBD.CollisionType;
+                    newOBD.Image = oldOBD.Image;
+                    newOI.ObjectLoader = newOBD;
+                    break;
+                default:
+                    MFAObjectLoader newOC = oI.Header.Type switch
+                    {
+                        2 => new MFAActive(),
+                        3 => new MFAString(),
+                        4 => new MFAQNA(),
+                        5 or 6 => new MFACounterAlt(),
+                        7 => new MFACounter(),
+                        8 => new MFAFormattedText(),
+                        9 => new MFASubApplication(),
+                        _ => new MFAExtensionObject()
+                    };
+                    ObjectCommon? oldOC = oI.Properties as ObjectCommon;
+                    if (oldOC == null && oI.Header.Type >= 10)
+                    {
+                        // Extension object with no common properties - create minimal entry
+                        (newOC as MFAExtensionObject).Type = -1;
+                        if (NebulaCore.PackageData.Extensions.Exts.ContainsKey(newOI.ObjectType - 32))
+                        {
+                            Extension ext = NebulaCore.PackageData.Extensions.Exts[newOI.ObjectType - 32];
+                            (newOC as MFAExtensionObject).Name = ext.Name;
+                            (newOC as MFAExtensionObject).FileName = ext.FileName;
+                            (newOC as MFAExtensionObject).Magic = (uint)ext.MagicNumber;
+                            (newOC as MFAExtensionObject).SubType = ext.SubType;
+                        }
+                        newOI.ObjectLoader = newOC;
+                        break;
+                    }
+                    if (oldOC == null) return null;
+                    
+                    newOC.ObjectFlags.Value = oldOC.ObjectFlags.Value;
+                    newOC.ObjectFlags["CCNCheck"] = false;
+                    newOC.NewObjectFlags.Value = oldOC.NewObjectFlags.Value;
+                    newOC.Background = oldOC.BackColor;
+                    newOC.Qualifiers = oldOC.Qualifiers;
+                    newOC.AlterableValues = oldOC.ObjectAlterableValues;
+                    newOC.AlterableStrings = oldOC.ObjectAlterableStrings;
+                    newOC.Movements = oldOC.ObjectMovements;
+
+                    if (newOC.Movements.Movements.Length == 0)
+                        newOC.Movements.Movements = new ObjectMovement[] { new ObjectMovement() { Opt = 1 } };
+
+                    newOC.TransitionIn = oldOC.ObjectTransitionIn;
+                    newOC.TransitionOut = oldOC.ObjectTransitionOut;
+
+                    // Copy type-specific properties (simplified for missing objects)
+                    switch (oI.Header.Type)
+                    {
+                        case 2: // Active
+                            int highest = 0;
+                            foreach (var Dict in oldOC.ObjectAnimations.Animations)
+                                highest = Math.Max(highest, Dict.Key);
+                            (newOC as MFAActive).Animations = new Dictionary<int, ObjectAnimation>();
+                            for (int i = 0; i <= highest; i++)
+                                if (oldOC.ObjectAnimations.Animations.ContainsKey(i))
+                                    (newOC as MFAActive).Animations.Add(i, oldOC.ObjectAnimations.Animations[i]);
+                                else
+                                    (newOC as MFAActive).Animations.Add(i, new ObjectAnimation());
+                            break;
+                        case 3: // String
+                            (newOC as MFAString).Width = oldOC.ObjectParagraphs.Width;
+                            (newOC as MFAString).Height = oldOC.ObjectParagraphs.Height;
+                            (newOC as MFAString).Font = oldOC.ObjectParagraphs.Paragraphs[0].FontHandle;
+                            (newOC as MFAString).Color = oldOC.ObjectParagraphs.Paragraphs[0].Color;
+                            (newOC as MFAString).StringFlags.Value = oldOC.ObjectParagraphs.Paragraphs[0].ParagraphFlags.Value;
+                            (newOC as MFAString).Paragraphs = oldOC.ObjectParagraphs.Paragraphs;
+                            break;
+                        case 7: // Counter
+                            (newOC as MFACounter).DisplayType = oldOC.ObjectCounter.DisplayType;
+                            (newOC as MFACounter).Width = oldOC.ObjectCounter.Width * (oldOC.ObjectCounter.Shape.LineFlags["FlipX"] ? -1 : 1);
+                            (newOC as MFACounter).Height = oldOC.ObjectCounter.Height * (oldOC.ObjectCounter.Shape.LineFlags["FlipY"] ? -1 : 1);
+                            (newOC as MFACounter).BarDirection = oldOC.ObjectCounter.BarDirection ? 1 : 0;
+                            (newOC as MFACounter).FillType = oldOC.ObjectCounter.Shape.FillType;
+                            (newOC as MFACounter).Color1 = oldOC.ObjectCounter.Shape.Color1;
+                            (newOC as MFACounter).Color2 = oldOC.ObjectCounter.Shape.Color2;
+                            (newOC as MFACounter).VerticalGradient = oldOC.ObjectCounter.Shape.VerticalGradient;
+                            (newOC as MFACounter).Images = oldOC.ObjectCounter.Frames;
+                            (newOC as MFACounter).Font = oldOC.ObjectCounter.Font;
+                            (newOC as MFACounter).Value = oldOC.ObjectValue.Initial;
+                            (newOC as MFACounter).Minimum = oldOC.ObjectValue.Minimum;
+                            (newOC as MFACounter).Maximum = oldOC.ObjectValue.Maximum;
+                            newOI.CounterFlags = new MFACounterFlags();
+                            newOI.CounterFlags.CounterFlags.Value = 0;
+                            newOI.CounterFlags.CounterFlags["IntFixedDigitCount"] = oldOC.ObjectCounter.IntDigitPadding;
+                            newOI.CounterFlags.CounterFlags["FloatFixedWholeCount"] = oldOC.ObjectCounter.FloatWholePadding;
+                            newOI.CounterFlags.CounterFlags["FloatFixedDecimalCount"] = oldOC.ObjectCounter.FloatDecimalPadding;
+                            newOI.CounterFlags.CounterFlags["FloatPadLeft"] = oldOC.ObjectCounter.FloatPadding;
+                            newOI.CounterFlags.FixedDigits = oldOC.ObjectCounter.IntDigitCount;
+                            newOI.CounterFlags.SignificantDigits = oldOC.ObjectCounter.FloatWholeCount;
+                            newOI.CounterFlags.DecimalPoints = oldOC.ObjectCounter.FloatDecimalCount;
+                            break;
+                        case 8: // Formatted Text
+                            (newOC as MFAFormattedText).Width = oldOC.ObjectFormattedText.Width;
+                            (newOC as MFAFormattedText).Height = oldOC.ObjectFormattedText.Height;
+                            (newOC as MFAFormattedText).FTFlags.Value = oldOC.ObjectFormattedText.FTFlags.Value;
+                            (newOC as MFAFormattedText).Color = oldOC.ObjectFormattedText.Color;
+                            (newOC as MFAFormattedText).Data = oldOC.ObjectFormattedText.Data;
+                            break;
+                        default:
+                            if (oI.Header.Type >= 10)
+                            {
+                                // Extension object
+                                (newOC as MFAExtensionObject).Type = -1;
+                                Extension ext = NebulaCore.PackageData.Extensions.Exts[newOI.ObjectType - 32];
+                                (newOC as MFAExtensionObject).Name = ext.Name;
+                                (newOC as MFAExtensionObject).FileName = ext.FileName;
+                                (newOC as MFAExtensionObject).Magic = (uint)ext.MagicNumber;
+                                (newOC as MFAExtensionObject).SubType = ext.SubType;
+                                (newOC as MFAExtensionObject).Version = oldOC.ObjectExtension.ExtensionVersion;
+                                (newOC as MFAExtensionObject).ID = oldOC.ObjectExtension.ExtensionID;
+                                (newOC as MFAExtensionObject).Private = oldOC.ObjectExtension.ExtensionPrivate;
+                                (newOC as MFAExtensionObject).Data = oldOC.ObjectExtension.ExtensionData;
+                            }
+                            break;
+                    }
+
+                    newOI.ObjectLoader = newOC;
+                    break;
+            }
+            return newOI;
+        }
+
+        /// <summary>
+        /// Collect all ObjectInfo references from a parameter's data (recursive for expressions).
+        /// </summary>
+        private void CollectParameterObjectInfos(Parameter param, HashSet<uint> referencedInfos)
+        {
+            if (param.Data is ParameterObject pObj)
+            {
+                if (pObj.ObjectInfo != 0)
+                    referencedInfos.Add(pObj.ObjectInfo);
+            }
+            else if (param.Data is ParameterExpressions pExps)
+            {
+                foreach (var exp in pExps.Expressions)
+                {
+                    if (exp.ObjectInfo != 0)
+                        referencedInfos.Add(exp.ObjectInfo);
+                }
+            }
         }
 
         public void Fix()

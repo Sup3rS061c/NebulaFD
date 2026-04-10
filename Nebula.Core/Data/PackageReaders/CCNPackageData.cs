@@ -16,6 +16,17 @@ namespace Nebula.Core.Data.PackageReaders
             Header = reader.ReadAscii(4);
             this.Log("Game Header: " + Header);
 
+            // CTFAK2.0: PAMU=Unicode, PAME=ASCII, CRUF=Fusion3
+            if (Header == "PAMU")
+                NebulaCore._yunicode = true;
+            else if (Header == "PAME")
+                NebulaCore._yunicode = false;
+            else if (Header == "CRUF")
+            {
+                // Fusion 3 header - will be handled in ExtendedHeader
+                NebulaCore.Seeded = true;
+            }
+
             RuntimeVersion = reader.ReadShort();
             RuntimeSubversion = reader.ReadShort();
             ProductVersion = reader.ReadInt();
@@ -49,6 +60,17 @@ namespace Nebula.Core.Data.PackageReaders
 
                 ByteReader chunkReader = new ByteReader(newChunk.ChunkData!);
                 newChunk.ReadCCN(chunkReader);
+
+                // CTFAK2.0: After reading EditorFilename chunk, generate decryption key
+                // Key order depends on Build > 284 (CTFAK2.0 line 194-195)
+                if (newChunk.ChunkID == 0x222E && !string.IsNullOrEmpty(NebulaCore.PackageData.EditorFilename))
+                {
+                    if (NebulaCore.Build > 284)
+                        Decryption.MakeKey(NebulaCore.PackageData.AppName, NebulaCore.PackageData.Copyright, NebulaCore.PackageData.EditorFilename);
+                    else
+                        Decryption.MakeKey(NebulaCore.PackageData.EditorFilename, NebulaCore.PackageData.AppName, NebulaCore.PackageData.Copyright);
+                }
+
                 if (!(NebulaCore.Fusion == 1.5f && newChunk.ChunkID >= 0x6666 && newChunk.ChunkID <= 0x6669))
                     newChunk.ChunkData = new byte[0];
             }

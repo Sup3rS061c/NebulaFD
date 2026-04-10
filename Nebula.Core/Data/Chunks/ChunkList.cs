@@ -124,7 +124,7 @@ namespace Nebula.Core.Data.Chunks
             { 0x6667, typeof(FontBank)            },
             { 0x6668, typeof(SoundBank)           },
             { 0x6669, typeof(MusicBank)           },
-            //0x7EEE         Fusion3Seed
+            { 0x7EEE, typeof(Fusion3Seed)         },  // Fusion 3 Seed (CTFAK2.0: 32494)
             { 0x7F7F, typeof(Last)                }
         };
     }

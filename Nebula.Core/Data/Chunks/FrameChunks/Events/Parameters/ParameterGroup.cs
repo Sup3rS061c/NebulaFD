@@ -29,7 +29,9 @@ namespace Nebula.Core.Data.Chunks.FrameChunks.Events.Parameters
             reader.Skip(4); // Checksum
             reader.Skip(2);
 
-            if (NebulaCore.Plus)
+            // CTFAK2.0: Build >= 293 overwrites group name with "Group {Id}"
+            // NebulaFD Plus mode (CTF 2.5+) also triggers this, but add explicit build check
+            if (NebulaCore.Plus || NebulaCore.Build >= 293)
                 Name = "Group " + ID;
         }
 

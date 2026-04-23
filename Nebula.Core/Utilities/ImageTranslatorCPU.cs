@@ -26,14 +26,18 @@ namespace Nebula.Core.Utilities
                     break;
             }
 
+            int rowBytes = img.Width * colorModeSize;
+
+            // Fix: return actual padding bytes needed to reach next alignment boundary,
+            // NOT the remainder (which was the original bug causing row misalignment)
             if (!img.Flags["RLET"] || NebulaCore.Plus || NebulaCore.Fusion < 2.0f)
-                return img.Width * colorModeSize % modSize;
+                return (modSize - (rowBytes % modSize)) % modSize;
             else if (NebulaCore.Android || NebulaCore.iOS)
-                return img.Width * colorModeSize;
+                return rowBytes;
             else if (NebulaCore.Build < 280)
-                return img.Width * colorModeSize % modSize * colorModeSize;
+                return ((modSize - (rowBytes % modSize)) % modSize) * colorModeSize;
             else
-                return img.Width % modSize * colorModeSize;
+                return (modSize - (img.Width % modSize)) % modSize * colorModeSize;
         }
 
         public static int GetAlphaPadding(Image img)
@@ -157,9 +161,10 @@ namespace Nebula.Core.Utilities
                         g = (byte)((newShort & 2016) >> 5);
                         b = (byte)((newShort & 31));
 
-                        r = (byte)(r << 3);
-                        g = (byte)(g << 2);
-                        b = (byte)(b << 3);
+                        // Fix: replicate high bits into low bits for proper 5/6→8 bit expansion
+                        r = (byte)((r << 3) | (r >> 2));
+                        g = (byte)((g << 2) | (g >> 4));
+                        b = (byte)((b << 3) | (b >> 2));
                         rleLoop = true;
                     }
 
@@ -238,9 +243,10 @@ namespace Nebula.Core.Utilities
                         g = (byte)((newShort & 992) >> 5);
                         b = (byte)((newShort & 31));
 
-                        r = (byte)(r << 3);
-                        g = (byte)(g << 3);
-                        b = (byte)(b << 3);
+                        // Fix: replicate high bits into low bits for proper 5→8 bit expansion
+                        r = (byte)((r << 3) | (r >> 2));
+                        g = (byte)((g << 3) | (g >> 2));
+                        b = (byte)((b << 3) | (b >> 2));
                         rleLoop = true;
                     }
 
@@ -333,9 +339,9 @@ namespace Nebula.Core.Utilities
                     var g = (byte)((newShort & 0xF00) >> 8);
                     var b = (byte)((newShort & 0xf0) >> 4);
 
-                    r = (byte)(r << 4);
-                    g = (byte)(g << 4);
-                    b = (byte)(b << 4);
+                    r = (byte)((r << 4) | (r >> 0));
+                    g = (byte)((g << 4) | (g >> 0));
+                    b = (byte)((b << 4) | (b >> 0));
                     a = (byte)(a << 4);
                     //r done
                     //g partially done
@@ -370,9 +376,9 @@ namespace Nebula.Core.Utilities
                     var g = (byte)((newShort & 0x7c0) >> 6);
                     var b = (byte)((newShort & 0x3e) >> 1);
 
-                    r = (byte)(r << 3);
-                    g = (byte)(g << 3);
-                    b = (byte)(b << 3);
+                    r = (byte)((r << 3) | (r >> 2));
+                    g = (byte)((g << 3) | (g >> 3));  // Android Mode 2: G is 5 bits (not 6)
+                    b = (byte)((b << 3) | (b >> 2));
                     a = (byte)(a << 4);
                     //r done
                     //g partially done
@@ -490,9 +496,11 @@ namespace Nebula.Core.Utilities
                     }
                     else
                     {
-                        if (img.ImageData[newPos + 2] == img.TransparentColor.R &&
-                            img.ImageData[newPos + 1] == img.TransparentColor.G &&
-                            img.ImageData[newPos + 0] == img.TransparentColor.B)
+                        // Fix: use the already-written colorArray values for transparent color check,
+                        // NOT img.ImageData indexed by newPos (which causes out-of-bounds read)
+                        if (colorArray[newPos + 0] == img.TransparentColor.R &&
+                            colorArray[newPos + 1] == img.TransparentColor.G &&
+                            colorArray[newPos + 2] == img.TransparentColor.B)
                             colorArray[newPos + 3] = 0;
                     }
                     position += 4;
@@ -535,8 +543,8 @@ namespace Nebula.Core.Utilities
                     colorArray[newPos + 1] = img.ImageData[position + 2];
                     colorArray[newPos + 2] = img.ImageData[position + 1];
 
-                    colorArray[newPos + 3] = 255;
-                    colorArray[(y * stride) + (x * 4) + 3] = img.ImageData[position + 0];
+                    // Fix: BGRA byte order in Flash format; alpha comes from position+0
+                    colorArray[newPos + 3] = img.ImageData[position + 0]; // Alpha from first byte
                     position += 4;
                 }
 
